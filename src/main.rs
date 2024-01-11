@@ -1,5 +1,5 @@
-use deno_core::{error::AnyError, op2, Extension};
-use std::rc::Rc;
+use deno_core::{error::AnyError, op2, Extension, Op};
+use std::{borrow::Cow, rc::Rc};
 
 #[op2(async)]
 #[string]
@@ -21,27 +21,41 @@ fn op_remove_file(#[string] path: String) -> Result<(), AnyError> {
     Ok(())
 }
 
+#[op2(async)]
+#[string]
+async fn op_fetch(#[string] url: String) -> Result<String, AnyError> {
+    let resp = reqwest::get(&url).await?.text().await?;
+    Ok(resp)
+}
+
 async fn run_js(file_path: &str) -> Result<(), AnyError> {
     let main_module = deno_core::resolve_path(file_path, std::env::current_dir()?.as_path())?;
-    let runjs_extension = Extension::builder("runjs")
-        .ops(vec![
-            op_read_file::decl(),
-            op_write_file::decl(),
-            op_remove_file::decl()
-        ])
-        .build();
+    let runjs_extension = Extension {
+        name: "runjs",
+        ops: Cow::from(vec![
+            op_read_file::DECL,
+            op_write_file::DECL,
+            op_remove_file::DECL,
+            op_fetch::DECL,
+        ]),
+        ..Default::default()
+    };
+
     let mut js_runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions {
         module_loader: Some(Rc::new(deno_core::FsModuleLoader)),
         extensions: vec![runjs_extension],
         ..Default::default()
     });
-    js_runtime.execute_script("[runjs:runtime.js]",  deno_core::FastString::from_static(include_str!("./runtime.js"))).unwrap();
+    js_runtime
+        .execute_script(
+            "[runjs:runtime.js]",
+            deno_core::FastString::from_static(include_str!("./runtime.js")),
+        )
+        .unwrap();
 
     let mod_id = js_runtime.load_main_module(&main_module, None).await?;
     let result = js_runtime.mod_evaluate(mod_id);
-    js_runtime
-        .run_event_loop(false)
-        .await?;
+    js_runtime.run_event_loop(false).await?;
     result.await?
 }
 
